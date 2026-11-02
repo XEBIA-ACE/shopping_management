@@ -1,0 +1,39 @@
+# Implementation Plan: SCAFFOLD-SVC-001
+
+## Technical Context
+- Technology stack: Node.js with TypeScript (Express/Fastify) or Java Spring Boot, bcrypt / Argon2 (password hashing), JWT (jsonwebtoken / jjwt) for token coordination, TypeORM / Hibernate (ORM with Repository Pattern), PostgreSQL (primary write store) with read replicas (CQRS query path), Redis 7.x (OTP tokens, idempotency keys, session data, profile cache), Apache Kafka / RabbitMQ (Transactional Outbox event publishing), Debezium or scheduled outbox poller (CDC for outbox processing), Flyway / Liquibase (schema migrations), MapStruct / class-transformer (DTO mapping), Docker + Kubernetes (EKS/GKE/AKS), OpenTelemetry (distributed tracing).
+- Platform: backend.
+- Set up the project skeleton for this stack: dependency manifest, entrypoint, and linting/formatting config.
+- Add environment-based configuration loading (no hardcoded secrets or endpoints).
+- Add a health-check endpoint so the service can be verified as running locally.
+- Add a database connection helper for the stack's datastore, configured via environment variables.
+- Existing class (C4): UserRegistrationController (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): UserIdentityController (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): AuthenticationFilter (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): GlobalExceptionHandler (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): RegistrationApplicationService (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): UserCommandService (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): UserQueryService (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): RegistrationStrategy (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): EmailRegistrationStrategy (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing class (C4): MobileRegistrationStrategy (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/register -- Creates a new user account using email address as the primary identifier. Validates email format, password complexity, and email uniqueness before persisting. Dispatches a verification email upon success. Enforces idempotency via Idempotency-Key header. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/register/mobile -- Creates a new user account using a mobile number as the primary identifier. Validates mobile number format (E.164), enforces uniqueness, hashes password, and triggers OTP dispatch via SMS. Enforces idempotency via Idempotency-Key header. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/verify/email -- Validates the email verification token sent to the user's email address. On success, marks the account as confirmed and issues a JWT session token. Token is single-use and TTL-bound. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/verify/otp -- Validates the OTP code sent to the user's mobile number. On success, marks the account as confirmed and issues a JWT session token. OTP is single-use with a 5-minute TTL stored in Redis. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: GET /api/v1/users/{userId}/profile -- Returns the profile data for the specified user. Implements CQRS read model — served from read replica or Redis cache. Only the authenticated user may retrieve their own profile (resource-level authorization). (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: PUT /api/v1/users/{userId}/account -- Updates mutable account fields (e.g., display name, mobile number, email) for the specified user. Publishes AccountUpdated domain event via Transactional Outbox Pattern. Only the authenticated user may update their own account. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: DELETE /api/v1/users/{userId}/account -- Performs a soft-delete of the user account by setting the deleted_at timestamp. Account data is retained for compliance/audit purposes. Publishes AccountDeactivated domain event. Only the authenticated user may deactivate their own account. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: GET /api/v1/users/{userId}/identity -- Returns minimal user identity data (userId, accountStatus) for internal service-to-service consumption. Used by the Wishlist Service to validate user ownership and account status before wishlist mutations. Secured via mTLS / internal service token. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/token/refresh -- Issues a new JWT access token using a valid refresh token. Enforces token expiry and rotation policies as defined by the Identity & Auth Service. (see [references/SVC-001.md](./references/SVC-001.md))
+- Existing API endpoint: POST /api/v1/auth/logout -- Revokes the current JWT session token and refresh token. Adds tokens to the Redis revocation list for immediate invalidation. (see [references/SVC-001.md](./references/SVC-001.md))
+
+## Contract Changes
+- No material API, event, or data contract change is evidenced.
+
+## Security and Quality
+- Validate credential and personal-data handling against the story's acceptance criteria
+- The scaffolded service must start successfully and its health-check endpoint must respond, using only environment-based configuration.
+
+## Verification Plan
+- **AC-1**: Scaffold the User Service (business) per its approved architecture. Technology stack: Node.js with TypeScript (Express/Fastify) or Java Spring Boot, bcrypt / Argon2 (password hashing), JWT (jsonwebtoken / jjwt) for token coordination, TypeORM / Hibernate (ORM with Repository Pattern), PostgreSQL (primary write store) with read replicas (CQRS query path), Redis 7.x (OTP tokens, idempotency keys, session data, profile cache), Apache Kafka / RabbitMQ (Transactional Outbox event publishing), Debezium or scheduled outbox poller (CDC for outbox processing), Flyway / Liquibase (schema migrations), MapStruct / class-transformer (DTO mapping), Docker + Kubernetes (EKS/GKE/AKS), OpenTelemetry (distributed tracing). Responsibilities: Handle email-based and mobile-based user registration flows using the Strategy Pattern (EmailRegistrationStrategy, MobileRegistrationStrategy); Validate credential format (email regex, mobile E.164 format) and enforce uniqueness constraints; Hash and securely store user passwords using bcrypt/Argon2; never persist plaintext credentials; Coordinate OTP generation and email verification token issuance, storing tokens in Redis with TTL; Enforce idempotency for registration requests using idempotency keys cached in Redis; Manage full account lifecycle: creation, verification, profile update, soft-delete/deactivation; Implement CQRS: separate Command Handlers (register, update, deactivate) and Query Handlers (profile retrieval) with read-replica and Redis cache for query path; Publish domain events (UserRegistered, AccountVerified, AccountUpdated) to the Event Bus via Transactional Outbox Pattern; Expose user identity and profile APIs for consumption by Wishlist Service and Product & Catalog Service via the API Gateway; Maintain audit trail entries for all account mutations (written to outbox and consumed by Audit & Logging Service); Encrypt PII fields (email, mobile) at rest using AES-256 before persistence; Apply input sanitization on all incoming DTOs to prevent injection attacks. Ground the generated spec in this service's own C3/C4 diagrams and API spec already on file in Architecture, not just this summary.
